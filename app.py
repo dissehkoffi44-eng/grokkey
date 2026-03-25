@@ -28,7 +28,7 @@ option = st.radio("Comment fournir la chanson ?", ["Fichier audio", "Lien YouTub
 audio_path = None
 
 if option == "Fichier audio":
-    uploaded = st.file_uploader("MP3, WAV, M4A, OGG...", type=["mp3", "wav", "m4a", "ogg"])
+    uploaded = st.file_uploader("MP3, WAV, M4A, OGG, FLAC...", type=["mp3", "wav", "m4a", "ogg", "flac"])
     if uploaded:
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded.name)[1]) as tmp:
             tmp.write(uploaded.getvalue())
