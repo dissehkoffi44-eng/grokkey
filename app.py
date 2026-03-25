@@ -170,7 +170,7 @@ if audio_path and os.path.exists(audio_path):
             segment_votes.append(vote)
             segment_scores_list.append(scores)
 
-        # ── Vote final pondéré ──
+        # ── Vote final pondéré (tonalité globale) ──
         vote_counter = Counter(segment_votes)
         (best_idx, is_major), _ = vote_counter.most_common(1)[0]
 
@@ -178,7 +178,114 @@ if audio_path and os.path.exists(audio_path):
         avg_scores = np.mean(segment_scores_list, axis=0)
         confidence, best_score = compute_confidence(avg_scores, best_idx, is_major)
 
-        # ── Résultats ──
+        # ─────────────────────────────────────────────────────────────
+        # SCIENSION EN 2 TONALITÉS PRINCIPALES (40s + reste)
+        # ─────────────────────────────────────────────────────────────
+        st.markdown("---")
+        st.subheader("📍 Tonalités principales par section")
+        st.caption("Premières 40 secondes vs. reste du morceau (même algorithme triple-profil + vote segmenté)")
+
+        def get_key_for_section(section_y, section_name):
+            """Analyse une partie du morceau (réutilise exactement la même logique que le vote global)."""
+            if len(section_y) < sr * 5:  # trop court
+                return {
+                    "tonalite_fr": "Trop court",
+                    "camelot": "—",
+                    "confidence": 0,
+                    "section_name": section_name
+                }
+
+            segment_sec = 20
+            hop_sec = 10
+            segment_samples = segment_sec * sr
+            hop_samples = hop_sec * sr
+
+            segment_votes = []
+            segment_scores_list = []
+
+            starts = range(0, max(1, len(section_y) - segment_samples), hop_samples)
+            if len(section_y) < segment_samples:
+                starts = [0]
+
+            for start in starts:
+                seg = section_y[start:start + segment_samples]
+                if len(seg) < sr * 2:
+                    continue
+
+                chroma_seg = librosa.feature.chroma_cqt(
+                    y=seg, sr=sr, bins_per_octave=36, n_octaves=7, norm=2
+                )
+
+                # Pondération RMS (identique au code original)
+                rms = librosa.feature.rms(y=seg)[0]
+                rms = rms[:chroma_seg.shape[1]]
+                weights = rms / (rms.sum() + 1e-8)
+                chroma_w = np.average(chroma_seg, axis=1, weights=weights)
+
+                vote, scores = detect_key_segment(chroma_w)
+                segment_votes.append(vote)
+                segment_scores_list.append(scores)
+
+            if not segment_votes:
+                return {"tonalite_fr": "Impossible", "camelot": "—", "confidence": 0, "section_name": section_name}
+
+            # Vote final de la section
+            vote_counter = Counter(segment_votes)
+            (best_idx_sec, is_major_sec), _ = vote_counter.most_common(1)[0]
+
+            avg_scores_sec = np.mean(segment_scores_list, axis=0)
+            confidence_sec, _ = compute_confidence(avg_scores_sec, best_idx_sec, is_major_sec)
+
+            note_fr = KEYS_FR[best_idx_sec]
+            mode_fr = "majeur" if is_major_sec else "mineur"
+            note_en = FR_TO_EN[note_fr]
+            mode_en = "major" if is_major_sec else "minor"
+            tonalite_fr = f"{note_fr} {mode_fr}"
+            camelot_code = CAMELOT_MAP.get(f"{note_en} {mode_en}", "?")
+
+            return {
+                "tonalite_fr": tonalite_fr,
+                "camelot": camelot_code,
+                "confidence": confidence_sec,
+                "section_name": section_name,
+                "best_idx": best_idx_sec,
+                "is_major": is_major_sec
+            }
+
+        # Découpage des deux parties
+        early_y = y_harmonic[:int(40 * sr)]
+        late_y = y_harmonic[int(40 * sr):]
+
+        early_data = get_key_for_section(early_y, "Premières 40 secondes")
+        late_data = get_key_for_section(late_y, "Reste du morceau") if len(late_y) > sr * 5 else None
+
+        # Affichage en colonnes (propre et lisible)
+        col_early, col_late = st.columns(2)
+
+        with col_early:
+            st.markdown(f"**{early_data['section_name']}**")
+            st.metric("🎵 Tonalité", early_data["tonalite_fr"])
+            st.metric("🔑 Camelot", early_data["camelot"])
+            st.metric("📊 Confiance", f"{early_data['confidence']}%")
+
+        if late_data:
+            with col_late:
+                st.markdown(f"**{late_data['section_name']}**")
+                st.metric("🎵 Tonalité", late_data["tonalite_fr"])
+                st.metric("🔑 Camelot", late_data["camelot"])
+                st.metric("📊 Confiance", f"{late_data['confidence']}%")
+        else:
+            with col_late:
+                st.info("Morceau trop court pour une seconde partie")
+
+        # Optionnel : petite info si les deux tonalités sont différentes
+        if late_data and early_data["tonalite_fr"] != late_data["tonalite_fr"]:
+            st.success("🔄 Changement de tonalité détecté entre intro et corps du morceau !")
+
+        # ── Résultats globaux (tonalité complète du morceau) ──
+        st.markdown("---")
+        st.subheader("🎯 Tonalité globale du morceau (analyse complète)")
+        
         note_fr = KEYS_FR[best_idx]
         note_en = FR_TO_EN[note_fr]
         mode_fr = "majeur" if is_major else "mineur"
@@ -197,10 +304,9 @@ if audio_path and os.path.exists(audio_path):
             f"{camelot_num}{opposite}"
         ]
 
-        # ── Affichage métriques ──
-        st.markdown("---")
+        # ── Affichage métriques globales ──
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("🎵 Tonalité", tonalite_fr)
+        col1.metric("🎵 Tonalité globale", tonalite_fr)
         col2.metric("🔑 Camelot", camelot_code)
         col3.metric("📊 Confiance", f"{confidence}%")
         col4.metric("🔗 Compatibles", " · ".join(compatible))
@@ -237,7 +343,7 @@ if audio_path and os.path.exists(audio_path):
         ax1.spines[:].set_color('#333')
         ax1.legend(facecolor='#1a1a2e', labelcolor='white', fontsize=10)
         ax1.grid(axis='y', color='#333', linestyle='--', linewidth=0.6, zorder=0)
-        ax1.set_title(f"Profil harmonique — Résultat : {tonalite_fr} ({camelot_code})",
+        ax1.set_title(f"Profil harmonique — Résultat global : {tonalite_fr} ({camelot_code})",
                       color='white', fontsize=13, fontweight='bold')
         plt.tight_layout()
         st.pyplot(fig1)
@@ -257,7 +363,7 @@ if audio_path and os.path.exists(audio_path):
         ax2.fill_between(x, min_scores_arr, alpha=0.15, color='#ff9f43')
 
         ax2.axvline(x=best_idx, color='#ff6b6b', linewidth=2.5, linestyle='--',
-                    label=f'Tonalité : {tonalite_fr}', zorder=5)
+                    label=f'Tonalité globale : {tonalite_fr}', zorder=5)
         ax2.scatter([best_idx], [avg_scores[best_idx][0 if is_major else 1]],
                     color='#ff6b6b', s=120, zorder=6)
 
@@ -312,7 +418,7 @@ if audio_path and os.path.exists(audio_path):
         ax4.set_xticklabels(seg_labels, rotation=45, ha='right', color='white', fontsize=9)
         ax4.set_yticks([])
         ax4.spines[:].set_color('#333')
-        ax4.set_title("Rouge = vote pour la tonalité finale", color='white', fontsize=10)
+        ax4.set_title("Rouge = vote pour la tonalité globale finale", color='white', fontsize=10)
         plt.tight_layout()
         st.pyplot(fig4)
 
