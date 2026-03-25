@@ -12,7 +12,9 @@ from datetime import datetime
 st.set_page_config(page_title="Detecteur de Tonalite PRO+", page_icon="", layout="wide")
 st.title("Detecteur de Tonalite Musicale - Version ULTRA PRO")
 st.markdown("**Triple profil (Krumhansl + Temperley + Aarden) - Vote par segments - Ponderation RMS - Correction tuning**")
-
+# Récupération des secrets
+TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN")
+CHAT_ID = st.secrets.get("CHAT_ID")
 # Camelot Map
 CAMELOT_MAP = {
     'C major': '8B', 'C# major': '3B', 'D major': '10B', 'D# major': '5B',
