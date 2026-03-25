@@ -7,11 +7,11 @@ import tempfile
 import os
 from collections import Counter
 
-st.set_page_config(page_title="🔑 Détecteur de Tonalité PRO+", page_icon="🎵", layout="wide")
-st.title("🔑 Détecteur de Tonalité Musicale – Version ULTRA PRO")
-st.markdown("**Triple profil (Krumhansl + Temperley + Aarden) · Vote par segments · Pondération RMS · Correction tuning**")
+st.set_page_config(page_title="🔑 Détecteur de Tonalité DUAL", layout="wide")
+st.title("🔑 Détecteur de Tonalité Musicale – Analyse Scindée")
+st.markdown("**Analyse différenciée : 40 premières secondes VS Reste du morceau**")
 
-# ── Camelot Map ──
+# --- Configuration & Constantes (Inchangées) ---
 CAMELOT_MAP = {
     'C major': '8B', 'C# major': '3B', 'D major': '10B', 'D# major': '5B',
     'E major': '12B', 'F major': '7B', 'F# major': '2B', 'G major': '9B',
@@ -20,15 +20,10 @@ CAMELOT_MAP = {
     'E minor': '9A', 'F minor': '4A', 'F# minor': '11A', 'G minor': '6A',
     'G# minor': '1A', 'A minor': '8A', 'A# minor': '3A', 'B minor': '10A'
 }
-
-FR_TO_EN = {
-    'Do': 'C', 'Do#': 'C#', 'Ré': 'D', 'Ré#': 'D#', 'Mi': 'E', 'Fa': 'F',
-    'Fa#': 'F#', 'Sol': 'G', 'Sol#': 'G#', 'La': 'A', 'La#': 'A#', 'Si': 'B'
-}
+FR_TO_EN = {'Do': 'C', 'Do#': 'C#', 'Ré': 'D', 'Ré#': 'D#', 'Mi': 'E', 'Fa': 'F', 'Fa#': 'F#', 'Sol': 'G', 'Sol#': 'G#', 'La': 'A', 'La#': 'A#', 'Si': 'B'}
 KEYS_FR = ['Do', 'Do#', 'Ré', 'Ré#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si']
 KEYS_EN = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 
-# ── Profils harmoniques (3 algorithmes) ──
 PROFILES = {
     'Krumhansl': {
         'major': np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]),
@@ -39,10 +34,8 @@ PROFILES = {
         'minor': np.array([5.0, 2.0, 3.5, 4.5, 2.0, 4.0, 2.0, 4.5, 3.5, 2.0, 1.5, 4.0])
     },
     'Aarden': {
-        'major': np.array([17.7661, 0.145624, 14.9265, 0.160186, 19.8049, 11.3587,
-                           0.291248, 22.062, 0.145624, 8.15494, 0.232998, 4.95122]),
-        'minor': np.array([18.2648, 0.737619, 14.0499, 16.8599, 0.702494, 14.4362,
-                           0.702494, 18.6161, 4.56621, 1.93186, 7.37619, 1.75623])
+        'major': np.array([17.7661, 0.145624, 14.9265, 0.160186, 19.8049, 11.3587, 0.291248, 22.062, 0.145624, 8.15494, 0.232998, 4.95122]),
+        'minor': np.array([18.2648, 0.737619, 14.0499, 16.8599, 0.702494, 14.4362, 0.702494, 18.6161, 4.56621, 1.93186, 7.37619, 1.75623])
     }
 }
 
@@ -52,15 +45,11 @@ def normalize(arr):
     return arr / std if std > 0 else arr
 
 def detect_key_segment(chroma_weighted):
-    """Détecte la tonalité d'un segment par vote triple profil."""
     votes = []
-    all_scores = np.zeros((12, 2))  # [note][0=major, 1=minor]
-
+    all_scores = np.zeros((12, 2))
     for profile_name, profile in PROFILES.items():
-        maj = normalize(profile['major'])
-        min_ = normalize(profile['minor'])
+        maj, min_ = normalize(profile['major']), normalize(profile['minor'])
         chroma_n = normalize(chroma_weighted)
-
         corrs = []
         for i in range(12):
             mc = np.corrcoef(chroma_n, np.roll(maj, i))[0, 1]
@@ -68,263 +57,131 @@ def detect_key_segment(chroma_weighted):
             corrs.append((mc, nc))
             all_scores[i][0] += mc
             all_scores[i][1] += nc
-
         best_i = np.argmax([max(m, n) for m, n in corrs])
-        is_maj = corrs[best_i][0] > corrs[best_i][1]
-        votes.append((best_i, is_maj))
-
-    # Vote majoritaire sur les 3 profils
+        votes.append((best_i, corrs[best_i][0] > corrs[best_i][1]))
+    
     vote_counter = Counter(votes)
     best_vote, count = vote_counter.most_common(1)[0]
-
-    # Si pas de consensus (3 résultats différents), on prend les scores cumulés
     if count == 1:
         flat_best = np.argmax(all_scores.flatten())
-        best_i = flat_best // 2
-        is_maj = (flat_best % 2) == 0
-        best_vote = (best_i, is_maj)
-
+        best_vote = (flat_best // 2, (flat_best % 2) == 0)
     return best_vote, all_scores / len(PROFILES)
 
 def compute_confidence(all_scores, best_idx, is_major):
-    """Calcule la confiance en tenant compte de l'écart avec le second candidat."""
     mode_idx = 0 if is_major else 1
     best_score = all_scores[best_idx][mode_idx]
-
     all_flat = all_scores.flatten()
     sorted_scores = np.sort(all_flat)[::-1]
     second_best = sorted_scores[1] if sorted_scores[0] == best_score else sorted_scores[0]
-
     gap = best_score - second_best
-    raw_conf = (best_score + 1) / 2
-    gap_bonus = min(gap * 30, 15)
-    confidence = int(np.clip(raw_conf * 100 + gap_bonus, 0, 99))
-    return confidence, best_score
+    confidence = int(np.clip(((best_score + 1) / 2) * 100 + min(gap * 30, 15), 0, 99))
+    return confidence
 
-# ── Interface ──
-option = st.radio("Comment fournir la chanson ?", ["Fichier audio", "Lien YouTube"])
+# --- Nouvelle fonction de traitement par section ---
+def analyser_portion(y_section, sr):
+    if len(y_section) < sr * 2: return None
+    
+    segment_sec, hop_sec = 15, 7
+    segment_samples, hop_samples = segment_sec * sr, hop_sec * sr
+    
+    votes, scores_list = [], []
+    starts = range(0, max(1, len(y_section) - segment_samples), hop_samples)
+    
+    for start in starts:
+        seg = y_section[start:start + segment_samples]
+        if len(seg) < sr * 2: continue
+        chroma_seg = librosa.feature.chroma_cqt(y=seg, sr=sr, bins_per_octave=36, n_octaves=7)
+        rms = librosa.feature.rms(y=seg)[0][:chroma_seg.shape[1]]
+        weights = rms / (rms.sum() + 1e-8)
+        chroma_w = np.average(chroma_seg, axis=1, weights=weights)
+        
+        vote, scores = detect_key_segment(chroma_w)
+        votes.append(vote)
+        scores_list.append(scores)
+    
+    if not votes: return None
+    
+    best_vote = Counter(votes).most_common(1)[0][0]
+    avg_scores = np.mean(scores_list, axis=0)
+    conf = compute_confidence(avg_scores, best_vote[0], best_vote[1])
+    
+    # Formattage texte
+    note_fr = KEYS_FR[best_vote[0]]
+    mode_en = "major" if best_vote[1] else "minor"
+    camelot = CAMELOT_MAP.get(f"{FR_TO_EN[note_fr]} {mode_en}", "?")
+    
+    return {
+        "tonalite": f"{note_fr} {'majeur' if best_vote[1] else 'mineur'}",
+        "camelot": camelot,
+        "confiance": conf,
+        "scores": avg_scores,
+        "idx": best_vote[0],
+        "is_maj": best_vote[1]
+    }
+
+# --- Interface & Logique de téléchargement ---
+option = st.radio("Source audio", ["Fichier local", "YouTube"])
 audio_path = None
 
-if option == "Fichier audio":
-    uploaded = st.file_uploader(
-        "MP3, WAV, M4A, OGG, FLAC...",
-        type=["mp3", "wav", "m4a", "ogg", "flac"]
-    )
+if option == "Fichier local":
+    uploaded = st.file_uploader("Audio", type=["mp3", "wav", "m4a", "flac"])
     if uploaded:
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded.name)[1]) as tmp:
             tmp.write(uploaded.getvalue())
             audio_path = tmp.name
 else:
-    url = st.text_input("Colle le lien YouTube")
-    if url and st.button("📥 Télécharger & analyser"):
+    url = st.text_input("Lien YouTube")
+    if url and st.button("Analyser"):
         with st.spinner("Téléchargement..."):
-            os.system(f'yt-dlp -x --audio-format wav --no-warnings -o "temp.wav" "{url}"')
+            os.system(f'yt-dlp -x --audio-format wav -o "temp.wav" "{url}"')
             audio_path = "temp.wav"
 
 if audio_path and os.path.exists(audio_path):
-    with st.spinner("Analyse ULTRA PRO en cours..."):
-
-        # ── Chargement ──
-        y, sr = librosa.load(audio_path, sr=22050, duration=300)
-        y_harmonic, y_percussive = librosa.effects.hpss(y, margin=3.0)
-
-        # ── Correction tuning ──
+    with st.spinner("Analyse des deux sections en cours..."):
+        y, sr = librosa.load(audio_path, sr=22050)
+        y_harmonic, _ = librosa.effects.hpss(y, margin=3.0)
+        
+        # Correction tuning globale
         tuning = librosa.estimate_tuning(y=y_harmonic, sr=sr)
-        cents = round(tuning * 100, 1)
         if abs(tuning) > 0.05:
             y_harmonic = librosa.effects.pitch_shift(y=y_harmonic, sr=sr, n_steps=-tuning)
-            st.info(f"🔧 Désaccordage corrigé : **{cents:+.1f} cents**")
-        else:
-            st.success("✅ Morceau accordé (A4 ≈ 440 Hz)")
 
-        # ── Analyse par segments avec vote ──
-        segment_sec = 20
-        hop_sec = 10  # chevauchement 50%
-        segment_samples = segment_sec * sr
-        hop_samples = hop_sec * sr
+        # --- SCISSION DES DONNÉES ---
+        split_point = 40 * sr
+        y_intro = y_harmonic[:split_point]
+        y_reste = y_harmonic[split_point:]
+        
+        res1 = analyser_portion(y_intro, sr)
+        res2 = analyser_portion(y_reste, sr) if len(y_reste) > sr*2 else None
 
-        segment_votes = []
-        segment_scores_list = []
+        # --- AFFICHAGE ---
+        st.header("🎯 Résultats de l'analyse double")
+        
+        col_left, col_right = st.columns(2)
+        
+        with col_left:
+            st.subheader("⏱️ 40 premières secondes")
+            if res1:
+                st.metric("Tonalité", res1["tonalite"])
+                st.metric("Code Camelot", res1["camelot"])
+                st.progress(res1["confiance"]/100, text=f"Confiance: {res1['confiance']}%")
+            else:
+                st.warning("Audio trop court pour la section 1")
 
-        starts = range(0, max(1, len(y_harmonic) - segment_samples), hop_samples)
-        if len(y_harmonic) < segment_samples:
-            starts = [0]
-            segment_samples = len(y_harmonic)
+        with col_right:
+            st.subheader("⏳ Reste du morceau")
+            if res2:
+                st.metric("Tonalité", res2["tonalite"])
+                st.metric("Code Camelot", res2["camelot"])
+                st.progress(res2["confiance"]/100, text=f"Confiance: {res2['confiance']}%")
+            else:
+                st.info("Pas assez de données pour le reste du morceau")
 
-        for start in starts:
-            seg = y_harmonic[start:start + segment_samples]
-            if len(seg) < sr * 2:
-                continue
+        # Alerte si changement de tonalité
+        if res1 and res2 and res1["tonalite"] != res2["tonalite"]:
+            st.warning(f"⚠️ **Modulation détectée !** Le morceau semble passer de {res1['tonalite']} à {res2['tonalite']}.")
+        elif res1 and res2:
+            st.success("✅ Tonalité stable sur l'ensemble du morceau.")
 
-            chroma_seg = librosa.feature.chroma_cqt(
-                y=seg, sr=sr, bins_per_octave=36, n_octaves=7, norm=2
-            )
-
-            # Pondération RMS
-            rms = librosa.feature.rms(y=seg)[0]
-            rms = rms[:chroma_seg.shape[1]]
-            weights = rms / (rms.sum() + 1e-8)
-            chroma_w = np.average(chroma_seg, axis=1, weights=weights)
-
-            vote, scores = detect_key_segment(chroma_w)
-            segment_votes.append(vote)
-            segment_scores_list.append(scores)
-
-        # ── Vote final pondéré ──
-        vote_counter = Counter(segment_votes)
-        (best_idx, is_major), _ = vote_counter.most_common(1)[0]
-
-        # Scores moyens pour affichage
-        avg_scores = np.mean(segment_scores_list, axis=0)
-        confidence, best_score = compute_confidence(avg_scores, best_idx, is_major)
-
-        # ── Résultats ──
-        note_fr = KEYS_FR[best_idx]
-        note_en = FR_TO_EN[note_fr]
-        mode_fr = "majeur" if is_major else "mineur"
-        mode_en = "major" if is_major else "minor"
-        tonalite_fr = f"{note_fr} {mode_fr}"
-        camelot_code = CAMELOT_MAP.get(f"{note_en} {mode_en}", "?")
-
-        # Tonalités compatibles Camelot (adjacentes)
-        camelot_num = int(camelot_code[:-1])
-        camelot_letter = camelot_code[-1]
-        opposite = "A" if camelot_letter == "B" else "B"
-        compatible = [
-            f"{((camelot_num - 2) % 12) + 1}{camelot_letter}",
-            f"{camelot_num}{camelot_letter}",
-            f"{(camelot_num % 12) + 1}{camelot_letter}",
-            f"{camelot_num}{opposite}"
-        ]
-
-        # ── Affichage métriques ──
-        st.markdown("---")
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("🎵 Tonalité", tonalite_fr)
-        col2.metric("🔑 Camelot", camelot_code)
-        col3.metric("📊 Confiance", f"{confidence}%")
-        col4.metric("🔗 Compatibles", " · ".join(compatible))
-
-        if confidence >= 88:
-            st.balloons()
-
-        st.markdown("---")
-
-        # ══════════════════════════════════════════
-        # ── GRAPHIQUE 1 : Scores par note (majeur/mineur) ──
-        # ══════════════════════════════════════════
-        st.subheader("📊 Scores de corrélation moyens par note")
-        fig1, ax1 = plt.subplots(figsize=(13, 5), facecolor='#0e1117')
-        ax1.set_facecolor('#1a1a2e')
-
-        x = np.arange(12)
-        width = 0.38
-        maj_scores_arr = avg_scores[:, 0]
-        min_scores_arr = avg_scores[:, 1]
-
-        bars_maj = ax1.bar(x - width/2, maj_scores_arr, width, color='#00d4ff', alpha=0.85, label='Majeur', zorder=3)
-        bars_min = ax1.bar(x + width/2, min_scores_arr, width, color='#ff9f43', alpha=0.85, label='Mineur', zorder=3)
-
-        # Surbrillance tonalité gagnante
-        win_offset = -width/2 if is_major else width/2
-        ax1.bar(best_idx + win_offset, avg_scores[best_idx][0 if is_major else 1],
-                width, color='#ff6b6b', alpha=1.0, label=f'✅ {tonalite_fr}', zorder=4)
-
-        ax1.set_xticks(x)
-        ax1.set_xticklabels(KEYS_EN, color='white', fontsize=12)
-        ax1.set_ylabel("Corrélation moyenne", color='white', fontsize=11)
-        ax1.tick_params(colors='white')
-        ax1.spines[:].set_color('#333')
-        ax1.legend(facecolor='#1a1a2e', labelcolor='white', fontsize=10)
-        ax1.grid(axis='y', color='#333', linestyle='--', linewidth=0.6, zorder=0)
-        ax1.set_title(f"Profil harmonique — Résultat : {tonalite_fr} ({camelot_code})",
-                      color='white', fontsize=13, fontweight='bold')
-        plt.tight_layout()
-        st.pyplot(fig1)
-
-        # ══════════════════════════════════════════
-        # ── GRAPHIQUE 2 : Courbes de corrélation ──
-        # ══════════════════════════════════════════
-        st.subheader("📈 Courbes de corrélation (Majeur vs Mineur)")
-        fig2, ax2 = plt.subplots(figsize=(13, 4), facecolor='#0e1117')
-        ax2.set_facecolor('#1a1a2e')
-
-        ax2.plot(x, maj_scores_arr, color='#00d4ff', linewidth=2.5, marker='o',
-                 markersize=8, label='Majeur', zorder=3)
-        ax2.plot(x, min_scores_arr, color='#ff9f43', linewidth=2.5, marker='s',
-                 markersize=8, label='Mineur', zorder=3)
-        ax2.fill_between(x, maj_scores_arr, alpha=0.15, color='#00d4ff')
-        ax2.fill_between(x, min_scores_arr, alpha=0.15, color='#ff9f43')
-
-        ax2.axvline(x=best_idx, color='#ff6b6b', linewidth=2.5, linestyle='--',
-                    label=f'Tonalité : {tonalite_fr}', zorder=5)
-        ax2.scatter([best_idx], [avg_scores[best_idx][0 if is_major else 1]],
-                    color='#ff6b6b', s=120, zorder=6)
-
-        ax2.set_xticks(x)
-        ax2.set_xticklabels(KEYS_EN, color='white', fontsize=12)
-        ax2.set_ylabel("Corrélation", color='white', fontsize=11)
-        ax2.tick_params(colors='white')
-        ax2.spines[:].set_color('#333')
-        ax2.legend(facecolor='#1a1a2e', labelcolor='white', fontsize=10)
-        ax2.grid(color='#333', linestyle='--', linewidth=0.6)
-        plt.tight_layout()
-        st.pyplot(fig2)
-
-        # ══════════════════════════════════════════
-        # ── GRAPHIQUE 3 : Chromagramme temporel ──
-        # ══════════════════════════════════════════
-        st.subheader("🎼 Chromagramme temporel")
-        chroma_full = librosa.feature.chroma_cqt(
-            y=y_harmonic, sr=sr, bins_per_octave=36, n_octaves=7, norm=2
-        )
-        fig3, ax3 = plt.subplots(figsize=(13, 4), facecolor='#0e1117')
-        ax3.set_facecolor('#1a1a2e')
-        times = librosa.times_like(chroma_full, sr=sr)
-        colors_chroma = plt.cm.hsv(np.linspace(0, 1, 12))
-        for i in range(12):
-            alpha = 1.0 if i == best_idx else 0.5
-            lw = 2.5 if i == best_idx else 0.9
-            ax3.plot(times, chroma_full[i], color=colors_chroma[i],
-                     linewidth=lw, alpha=alpha, label=KEYS_EN[i])
-        ax3.set_xlabel("Temps (s)", color='white', fontsize=11)
-        ax3.set_ylabel("Énergie chromatique", color='white', fontsize=11)
-        ax3.tick_params(colors='white')
-        ax3.spines[:].set_color('#333')
-        ax3.legend(ncol=12, loc='upper right', fontsize=7,
-                   facecolor='#1a1a2e', labelcolor='white')
-        ax3.grid(color='#333', linestyle='--', linewidth=0.5)
-        ax3.set_title(f"Note dominante mise en évidence : {note_en} ({KEYS_EN[best_idx]})",
-                      color='white', fontsize=11)
-        plt.tight_layout()
-        st.pyplot(fig3)
-
-        # ══════════════════════════════════════════
-        # ── GRAPHIQUE 4 : Votes par segment ──
-        # ══════════════════════════════════════════
-        st.subheader("🗳️ Votes par segment temporel")
-        fig4, ax4 = plt.subplots(figsize=(13, 3), facecolor='#0e1117')
-        ax4.set_facecolor('#1a1a2e')
-        seg_labels = [f"{KEYS_FR[v[0]]} {'maj' if v[1] else 'min'}" for v in segment_votes]
-        seg_colors = ['#ff6b6b' if v == (best_idx, is_major) else '#555577' for v in segment_votes]
-        ax4.bar(range(len(seg_labels)), [1] * len(seg_labels), color=seg_colors, edgecolor='#222')
-        ax4.set_xticks(range(len(seg_labels)))
-        ax4.set_xticklabels(seg_labels, rotation=45, ha='right', color='white', fontsize=9)
-        ax4.set_yticks([])
-        ax4.spines[:].set_color('#333')
-        ax4.set_title("Rouge = vote pour la tonalité finale", color='white', fontsize=10)
-        plt.tight_layout()
-        st.pyplot(fig4)
-
-        # ── Nettoyage ──
-        try:
-            os.unlink(audio_path)
-        except:
-            pass
-        if os.path.exists("temp.wav"):
-            try:
-                os.unlink("temp.wav")
-            except:
-                pass
-
-st.caption("Version ULTRA PRO · Triple profil harmonique · Vote segmenté · Pondération RMS · Précision estimée : **92–96%**")
+    # Nettoyage
+    if os.path.exists(audio_path): os.remove(audio_path)
