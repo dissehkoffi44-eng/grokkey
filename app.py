@@ -10,7 +10,7 @@
     </style>
 </head>
 <body>
-    <h1> Code mis à jour – Détecteur de Tonalité ULTRA PRO + Envoi automatique Telegram</h1>
+    <h1> Code mis à jour  Détecteur de Tonalité ULTRA PRO + Envoi automatique Telegram</h1>
     <p><strong>Ce que j’ai ajouté :</strong></p>
     <ul>
         <li>Import <code>requests</code> + <code>datetime</code></li>
