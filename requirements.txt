@@ -1,6 +1,6 @@
 streamlit
 librosa
 numpy
-soundfile
-pydub
+matplotlib
 yt-dlp
+soundfile
