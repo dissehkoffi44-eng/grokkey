@@ -393,56 +393,164 @@ if audio_path and os.path.exists(audio_path):
         plt.tight_layout()
         st.pyplot(fig4)
 
-        # ENVOI AUTOMATIQUE TELEGRAM
+        # ── ENVOI TELEGRAM ──────────────────────────────────────────────
         st.markdown("---")
-        if "telegram" in st.secrets and "bot_token" in st.secrets["telegram"] and "chat_id" in st.secrets["telegram"]:
+        st.subheader("Envoi du rapport sur Telegram")
+
+        # --- Lecture des secrets Telegram (secrets.toml OU saisie manuelle) ---
+        def get_telegram_secrets():
+            """
+            Tente de lire bot_token et chat_id depuis st.secrets["telegram"].
+            Retourne (bot_token, chat_id) ou (None, None) si absents.
+            """
             try:
-                bot_token = st.secrets["telegram"]["bot_token"]
-                chat_id = st.secrets["telegram"]["chat_id"]
+                tg = st.secrets.get("telegram", {})
+                bot_token = tg.get("bot_token", "").strip()
+                chat_id   = tg.get("chat_id",   "").strip()
+                if bot_token and chat_id:
+                    return bot_token, chat_id
+            except Exception:
+                pass
+            return None, None
 
-                song_title = (
-                    uploaded.name if option == "Fichier audio" and uploaded is not None
-                    else (url if "url" in locals() and url else "Audio inconnu")
-                )
+        def send_telegram(bot_token, chat_id, text):
+            """
+            Envoie un message Telegram. Retourne (True, "") ou (False, raison).
+            Decoupe automatiquement si le message depasse 4096 caracteres.
+            """
+            url_api = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+            max_len = 4096
+            chunks  = [text[i:i+max_len] for i in range(0, len(text), max_len)]
+            for chunk in chunks:
+                payload = {"chat_id": chat_id, "text": chunk, "parse_mode": "Markdown"}
+                try:
+                    resp = requests.post(url_api, json=payload, timeout=10)
+                    if resp.status_code != 200:
+                        detail = resp.json().get("description", resp.text)
+                        return False, f"HTTP {resp.status_code} : {detail}"
+                except requests.exceptions.Timeout:
+                    return False, "Timeout - verifiez votre connexion"
+                except Exception as e:
+                    return False, str(e)
+            return True, ""
 
-                report_text = f"""Rapport Detecteur de Tonalite ULTRA PRO
+        def build_report(song_title, tonalite_fr, camelot_code, confidence,
+                         compatible, early_data, late_data, tuning, cents,
+                         segment_votes, KEYS_FR):
+            """Construit le rapport Markdown complet."""
+            nb_segments  = len(segment_votes)
+            votes_detail = ", ".join(
+                f"{KEYS_FR[v[0]]} {'maj' if v[1] else 'min'}" for v in segment_votes
+            )
+            changement = ""
+            if late_data and early_data["tonalite_fr"] != late_data["tonalite_fr"]:
+                changement = "\n*Changement de tonalite detecte entre intro et corps !*"
 
-Morceau : {song_title}
-Date : {datetime.now().strftime('%d/%m/%Y a %H:%M:%S')}
+            tuning_str = (
+                f"{cents:+.1f} cents (correction appliquee)"
+                if abs(tuning) > 0.05
+                else "Aucun (A4 = 440 Hz)"
+            )
 
-TONALITE GLOBALE
-- Tonalite : {tonalite_fr}
-- Camelot : {camelot_code}
-- Confiance : {confidence}%
+            late_tonalite  = late_data["tonalite_fr"] if late_data else "-"
+            late_camelot   = late_data["camelot"]     if late_data else "-"
+            late_confidence= late_data["confidence"]  if late_data else "-"
 
-Compatibles Camelot : {' - '.join(compatible)}
+            report = (
+                f"*Rapport - Detecteur de Tonalite ULTRA PRO*\n"
+                f"{'='*40}\n\n"
+                f"*Morceau :* {song_title}\n"
+                f"*Date :* {datetime.now().strftime('%d/%m/%Y a %H:%M:%S')}\n\n"
+                f"{'='*40}\n"
+                f"*TONALITE GLOBALE*\n"
+                f"  Tonalite  : *{tonalite_fr}*\n"
+                f"  Camelot   : *{camelot_code}*\n"
+                f"  Confiance : *{confidence}%*\n\n"
+                f"*Tonalites compatibles (Camelot) :*\n"
+                f"  {' | '.join(compatible)}\n\n"
+                f"{'='*40}\n"
+                f"*ANALYSE PAR SECTION*\n"
+                f"  Premieres 40s  : *{early_data['tonalite_fr']}* "
+                f"({early_data['camelot']}) - confiance {early_data['confidence']}%\n"
+                f"  Reste morceau  : *{late_tonalite}* "
+                f"({late_camelot}) - confiance {late_confidence}%"
+                f"{changement}\n\n"
+                f"{'='*40}\n"
+                f"*DETAIL SEGMENTS ({nb_segments} segments analyses)*\n"
+                f"  {votes_detail}\n\n"
+                f"{'='*40}\n"
+                f"*PARAMETRES TECHNIQUES*\n"
+                f"  Algorithmes  : Krumhansl + Temperley + Aarden\n"
+                f"  Methode      : Vote segmente + ponderation RMS\n"
+                f"  Tuning       : {tuning_str}\n"
+                f"  Precision    : 92-96%\n\n"
+                f"_Envoye automatiquement par l'app Streamlit ULTRA PRO_"
+            )
+            return report
 
-Sections
-- Premieres 40s : {early_data['tonalite_fr']} ({early_data['camelot']}) - {early_data['confidence']}%
-- Reste du morceau : {late_data['tonalite_fr'] if late_data else '-'} ({late_data['camelot'] if late_data else '-'}) - {late_data['confidence'] if late_data else '-'}%
+        # --- Recuperation du titre du morceau ---
+        song_title = (
+            uploaded.name
+            if option == "Fichier audio" and "uploaded" in dir() and uploaded is not None
+            else (url if "url" in locals() and url else "Audio inconnu")
+        )
 
-Correction tuning : {f'{cents:+.1f} cents' if abs(tuning) > 0.05 else 'Aucun (A4 = 440 Hz)'}
+        # --- Lecture secrets ---
+        bot_token_secret, chat_id_secret = get_telegram_secrets()
 
-Analyse : Triple profil (Krumhansl + Temperley + Aarden) - Vote segmente - Ponderation RMS
-Precision estimee : 92-96%
-"""
-
-                url_api = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-                payload = {
-                    "chat_id": chat_id,
-                    "text": report_text,
-                    "parse_mode": "Markdown"
-                }
-                resp = requests.post(url_api, json=payload)
-
-                if resp.status_code == 200:
-                    st.success("Rapport detaille envoye automatiquement sur Telegram !")
-                else:
-                    st.warning(f"Envoi Telegram echoue (code {resp.status_code})")
-            except Exception as e:
-                st.warning(f"Erreur lors de l'envoi Telegram : {str(e)}")
+        if bot_token_secret and chat_id_secret:
+            # Secrets trouves -> envoi automatique immediat
+            st.info(f"Secrets Telegram detectes. Envoi automatique en cours...")
+            report = build_report(
+                song_title, tonalite_fr, camelot_code, confidence,
+                compatible, early_data, late_data, tuning, cents,
+                segment_votes, KEYS_FR
+            )
+            ok, err = send_telegram(bot_token_secret, chat_id_secret, report)
+            if ok:
+                st.success("Rapport complet envoye automatiquement sur Telegram !")
+            else:
+                st.error(f"Echec de l'envoi automatique : {err}")
+                st.warning("Verifiez votre bot_token et chat_id dans .streamlit/secrets.toml")
         else:
-            st.info("Pour activer l'envoi automatique, configurez st.secrets['telegram'] (bot_token + chat_id).")
+            # Secrets absents -> formulaire de saisie manuelle
+            st.warning("Secrets Telegram non configures dans secrets.toml. Saisie manuelle :")
+            with st.form("telegram_form"):
+                manual_token   = st.text_input(
+                    "bot_token",
+                    type="password",
+                    placeholder="123456:ABC-DEFxxxxx"
+                )
+                manual_chat_id = st.text_input(
+                    "chat_id",
+                    placeholder="-1234567890"
+                )
+                submitted = st.form_submit_button("Envoyer le rapport sur Telegram")
+
+            if submitted:
+                if not manual_token.strip() or not manual_chat_id.strip():
+                    st.error("Veuillez renseigner le bot_token ET le chat_id.")
+                else:
+                    report = build_report(
+                        song_title, tonalite_fr, camelot_code, confidence,
+                        compatible, early_data, late_data, tuning, cents,
+                        segment_votes, KEYS_FR
+                    )
+                    ok, err = send_telegram(manual_token.strip(), manual_chat_id.strip(), report)
+                    if ok:
+                        st.success("Rapport envoye avec succes sur Telegram !")
+                    else:
+                        st.error(f"Echec de l'envoi : {err}")
+
+            with st.expander("Comment configurer secrets.toml pour l'envoi automatique ?"):
+                st.code(
+                    "[telegram]\nbot_token = \"123456:ABC-DEF...\"\nchat_id   = \"-1234567890\"",
+                    language="toml"
+                )
+                st.caption(
+                    "Placez ce fichier dans .streamlit/secrets.toml a la racine du projet. "
+                    "Le rapport sera alors envoye automatiquement apres chaque analyse."
+                )
 
         # Nettoyage
         try:
