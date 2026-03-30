@@ -124,7 +124,7 @@ else:
 if audio_path and os.path.exists(audio_path):
     with st.spinner("Analyse ULTRA PRO en cours..."):
 
-        y, sr = librosa.load(audio_path, sr=22050, duration=300)
+        y, sr = librosa.load(audio_path, sr=22050, duration=None)
         y_harmonic, y_percussive = librosa.effects.hpss(y, margin=3.0)
 
         tuning = librosa.estimate_tuning(y=y_harmonic, sr=sr)
